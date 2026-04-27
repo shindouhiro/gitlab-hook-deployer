@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from uuid import uuid4
 
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -25,201 +26,315 @@ PREVIEW_HTML = """<!doctype html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>GitLab Hook 部署可视化预览</title>
-  <meta name="description" content="GitLab Hook 部署流程可视化预览面板" />
+  <title>GitLab 部署可视化面板</title>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg-1: hsl(215 46% 10%);
-      --bg-2: hsl(201 64% 16%);
-      --glass: hsla(0 0% 100% / 0.1);
-      --text: hsl(210 40% 96%);
-      --muted: hsl(210 20% 75%);
-      --pending: hsl(214 18% 40%);
-      --running: hsl(199 92% 53%);
-      --success: hsl(148 70% 45%);
-      --failed: hsl(0 78% 59%);
-      --skipped: hsl(35 90% 56%);
+      --bg-gradient-start: #0f172a;
+      --bg-gradient-end: #1e293b;
+      --primary: #3b82f6;
+      --primary-hover: #2563eb;
+      --secondary: #8b5cf6;
+      --success: #10b981;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --glass-bg: rgba(255, 255, 255, 0.05);
+      --glass-border: rgba(255, 255, 255, 0.1);
+      --panel-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
     }
-    * { box-sizing: border-box; }
     body {
       margin: 0;
-      color: var(--text);
-      font-family: Outfit, "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
-      background:
-        radial-gradient(1000px 500px at 5% 5%, hsl(196 68% 30% / 0.28), transparent),
-        radial-gradient(800px 600px at 90% 0%, hsl(221 67% 25% / 0.4), transparent),
-        linear-gradient(130deg, var(--bg-1), var(--bg-2));
+      font-family: 'Inter', 'Outfit', sans-serif;
+      background: linear-gradient(135deg, var(--bg-gradient-start), var(--bg-gradient-end));
+      color: var(--text-main);
       min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      padding: 40px 20px;
     }
-    main {
-      width: min(1080px, 95vw);
-      margin: 24px auto 40px;
+    .dashboard {
+      width: 100%;
+      max-width: 1200px;
       display: grid;
-      gap: 16px;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+    }
+    @media (max-width: 968px) {
+      .dashboard { grid-template-columns: 1fr; }
     }
     .panel {
-      background: var(--glass);
-      border: 1px solid hsl(0 0% 100% / 0.15);
-      border-radius: 16px;
-      backdrop-filter: blur(14px);
-      box-shadow: 0 20px 50px hsl(210 60% 7% / 0.35);
-      padding: 16px;
+      background: var(--glass-bg);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--glass-border);
+      border-radius: 24px;
+      padding: 32px;
+      box-shadow: var(--panel-shadow);
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+      transition: transform 0.3s ease, box-shadow 0.3s ease;
     }
-    .hero h1 { margin: 0; font-size: clamp(24px, 3vw, 36px); }
-    .hero p { margin: 8px 0 0; color: var(--muted); }
-    .controls {
-      display: grid;
-      grid-template-columns: 1fr auto auto;
-      gap: 10px;
-      align-items: center;
+    .panel:hover {
+      box-shadow: 0 12px 40px 0 rgba(0, 0, 0, 0.4);
     }
-    .controls input, .controls select {
+    .panel-full {
+      grid-column: 1 / -1;
+    }
+    .header h1 { margin: 0; font-family: 'Outfit', sans-serif; font-weight: 700; font-size: 32px; background: -webkit-linear-gradient(45deg, #60a5fa, #c084fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .header p { margin: 8px 0 0 0; color: var(--text-muted); font-size: 15px; }
+    
+    .form-group { display: flex; flex-direction: column; gap: 8px; }
+    .form-group label { font-size: 14px; font-weight: 600; color: var(--text-muted); }
+    input[type="text"], select {
       width: 100%;
-      border: 1px solid hsl(0 0% 100% / 0.2);
-      border-radius: 10px;
-      padding: 11px 12px;
-      background: hsl(0 0% 100% / 0.1);
-      color: var(--text);
+      padding: 14px 16px;
+      border-radius: 12px;
+      border: 1px solid var(--glass-border);
+      background: rgba(0, 0, 0, 0.2);
+      color: var(--text-main);
+      font-size: 15px;
+      transition: border-color 0.2s, box-shadow 0.2s;
       outline: none;
+      box-sizing: border-box;
     }
-    .controls select option {
-      background: hsl(216 30% 15%);
-      color: var(--text);
+    input[type="text"]:focus, select:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
     }
-    .controls button {
-      border: 0;
-      border-radius: 10px;
-      padding: 10px 14px;
-      color: white;
-      cursor: pointer;
+    select option { background: var(--bg-gradient-end); color: var(--text-main); }
+    
+    .btn {
+      padding: 14px 24px;
+      border: none;
+      border-radius: 12px;
       font-weight: 600;
-      transition: transform .16s ease, opacity .16s ease;
-    }
-    .controls button:hover { transform: translateY(-1px); }
-    #connect-stream-btn { background: hsl(199 88% 47%); }
-    #load-projects-btn { background: hsl(271 66% 58%); }
-    #apply-hook-config-btn { background: hsl(145 70% 42%); }
-    #clear-log-btn { background: hsl(216 26% 30%); }
-    .status-line { color: var(--muted); margin-top: 10px; font-size: 14px; }
-    .section-title {
-      margin: 0 0 12px;
-      font-size: 18px;
-      font-weight: 700;
-    }
-    .project-picker-grid {
-      display: grid;
-      grid-template-columns: 1fr auto;
-      gap: 10px;
+      font-size: 15px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: inline-flex;
       align-items: center;
+      justify-content: center;
+      gap: 8px;
     }
-    .project-hook-grid {
-      display: grid;
-      grid-template-columns: 1.2fr 1fr 1fr auto;
-      gap: 10px;
+    .btn-primary { background: var(--primary); color: white; }
+    .btn-primary:hover { background: var(--primary-hover); transform: translateY(-2px); }
+    .btn-secondary { background: rgba(255,255,255,0.1); color: white; }
+    .btn-secondary:hover { background: rgba(255,255,255,0.15); transform: translateY(-2px); }
+    .btn-success { background: var(--success); color: white; }
+    .btn-success:hover { background: #059669; transform: translateY(-2px); }
+    
+    .status-text { font-size: 13px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
+    .status-text.active { color: var(--success); }
+    .status-text.error { color: var(--danger); }
+    .configured-section {
+      margin-top: 12px;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      padding-top: 12px;
+    }
+    .configured-header {
+      display: flex;
+      justify-content: space-between;
       align-items: center;
-      margin-top: 10px;
+      margin-bottom: 8px;
     }
+    .configured-header h3 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-main);
+    }
+    .configured-list {
+      max-height: 220px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .configured-item {
+      padding: 10px 12px;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 10px;
+      background: rgba(15, 23, 42, 0.35);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .configured-path { color: #a5b4fc; font-weight: 600; display: block; }
+    .configured-meta { color: var(--text-muted); }
+    .configured-empty {
+      color: var(--text-muted);
+      font-size: 12px;
+      padding: 8px 0;
+    }
+
+    /* Branch selector styles */
+    .branch-mode { display: flex; gap: 16px; margin-bottom: 4px; }
+    .radio-label {
+      display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 15px; color: var(--text-main);
+    }
+    .radio-label input[type="radio"] { accent-color: var(--primary); width: 18px; height: 18px; }
+
+    /* Steps Flow */
     .flow-grid {
       display: grid;
-      grid-template-columns: repeat(6, minmax(120px, 1fr));
-      gap: 10px;
+      grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+      gap: 16px;
+      width: 100%;
     }
     .step-card {
-      border-radius: 12px;
-      border: 1px solid hsl(0 0% 100% / 0.12);
-      background: hsl(210 30% 18% / 0.75);
-      padding: 12px 10px;
+      background: rgba(0, 0, 0, 0.2);
+      border: 1px solid var(--glass-border);
+      border-radius: 16px;
+      padding: 16px;
       position: relative;
       overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      transition: all 0.3s ease;
     }
-    .step-card::after {
-      content: "";
-      position: absolute;
-      inset: 0;
-      opacity: .2;
-      background: linear-gradient(130deg, transparent, hsl(0 0% 100% / .2), transparent);
-      transform: translateX(-100%);
+    .step-card .icon { font-size: 24px; margin-bottom: 8px; }
+    .step-card .title { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); }
+    .step-card .state { font-size: 14px; font-weight: 600; margin-top: 4px; }
+    
+    .step-card.pending { border-color: rgba(255,255,255,0.1); }
+    .step-card.pending .state { color: var(--text-muted); }
+    
+    .step-card.running { border-color: var(--primary); box-shadow: 0 0 15px rgba(59, 130, 246, 0.3); }
+    .step-card.running .state { color: var(--primary); }
+    .step-card.running::after {
+      content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
+      animation: shimmer 1.5s infinite linear; transform: translateX(-100%);
     }
-    .step-card.running::after { animation: sweep 1.25s linear infinite; }
-    .step-title { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
-    .step-state { margin-top: 6px; font-size: 15px; font-weight: 700; }
-    .step-card.pending { box-shadow: inset 0 0 0 1px hsl(214 18% 40% / .5); }
-    .step-card.running { box-shadow: inset 0 0 0 1px hsl(199 92% 53% / .8); }
-    .step-card.success { box-shadow: inset 0 0 0 1px hsl(148 70% 45% / .8); }
-    .step-card.failed { box-shadow: inset 0 0 0 1px hsl(0 78% 59% / .8); }
-    .step-card.skipped { box-shadow: inset 0 0 0 1px hsl(35 90% 56% / .85); }
-    .log-wrap { max-height: 360px; overflow: auto; font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, monospace; }
-    .log-line {
-      margin: 0;
-      padding: 8px 10px;
-      border-bottom: 1px dashed hsl(0 0% 100% / .08);
-      white-space: pre-wrap;
-      font-size: 12px;
-      line-height: 1.4;
+    
+    .step-card.success { border-color: var(--success); box-shadow: 0 0 15px rgba(16, 185, 129, 0.2); }
+    .step-card.success .state { color: var(--success); }
+    
+    .step-card.failed { border-color: var(--danger); box-shadow: 0 0 15px rgba(239, 68, 68, 0.2); }
+    .step-card.failed .state { color: var(--danger); }
+    
+    .step-card.skipped { border-color: var(--warning); box-shadow: 0 0 15px rgba(245, 158, 11, 0.2); }
+    .step-card.skipped .state { color: var(--warning); }
+
+    @keyframes shimmer { 100% { transform: translateX(100%); } }
+
+    /* Terminal */
+    .terminal {
+      background: #0f172a;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 16px;
+      padding: 16px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      height: 350px;
+      overflow-y: auto;
+      box-shadow: inset 0 2px 10px rgba(0,0,0,0.5);
     }
-    @keyframes sweep { to { transform: translateX(100%); } }
-    @media (max-width: 900px) {
-      .controls { grid-template-columns: 1fr; }
-      .project-picker-grid { grid-template-columns: 1fr; }
-      .project-hook-grid { grid-template-columns: 1fr; }
-      .flow-grid { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
-    }
+    .terminal::-webkit-scrollbar { width: 8px; }
+    .terminal::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); border-radius: 4px; }
+    .terminal::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 4px; }
+    .log-line { margin: 0; padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.05); color: #cbd5e1; word-break: break-all; }
+    .log-line .time { color: #64748b; margin-right: 8px; }
+    .log-line .step { color: #c084fc; font-weight: 600; margin-right: 8px; }
+    .log-line.success { color: #4ade80; }
+    .log-line.failed { color: #f87171; }
   </style>
 </head>
 <body>
-  <main>
-    <section class="panel hero">
-      <h1 id="preview-title">GitLab Hook 部署可视化预览</h1>
-      <p id="preview-subtitle">支持下拉选择项目配置 Hook，并实时查看部署过程。</p>
-    </section>
+  <div class="dashboard">
+    <!-- Header -->
+    <div class="panel panel-full">
+      <div class="header">
+        <h1>GitLab 部署控制台</h1>
+        <p>配置自动部署 Hook，实时可视化监控部署流程。</p>
+      </div>
+    </div>
 
-    <section class="panel" id="project-hook-config-panel">
-      <h2 id="project-hook-config-title" class="section-title">项目 Hook 配置</h2>
-      <div class="project-picker-grid">
-        <div class="controls">
-          <input id="project-search-input" placeholder="按项目名搜索（可选）" />
-          <select id="project-select" aria-label="项目下拉选择">
-            <option value="">请先加载项目列表</option>
+    <!-- Configuration Panel -->
+    <div class="panel">
+      <h2 style="margin: 0; font-size: 20px;">Hook 配置</h2>
+      
+      <div class="form-group">
+        <label>选择项目</label>
+        <div style="display: flex; gap: 8px;">
+          <select id="project-select">
+            <option value="">正在加载项目...</option>
           </select>
-          <button id="load-projects-btn" type="button">加载项目</button>
+          <button id="load-projects-btn" class="btn btn-secondary">刷新</button>
         </div>
       </div>
 
-      <div class="project-hook-grid">
-        <input id="hook-url-input" placeholder="Hook URL，例如 https://your-domain/api/hook/gitlab" />
-        <input id="hook-token-input" placeholder="Hook Token" />
-        <input id="hook-branch-filter-input" placeholder="分支过滤，例如 main 或 release/*" />
-        <button id="apply-hook-config-btn" type="button">配置选中项目</button>
+      <div class="form-group">
+        <label>Hook URL</label>
+        <input id="hook-url-input" type="text" placeholder="https://your-domain/api/hook/gitlab" />
       </div>
-      <div id="project-config-status-text" class="status-line">状态：待加载项目</div>
-    </section>
 
-    <section class="panel">
-      <div class="controls">
-        <input id="task-id-input" placeholder="请输入 task_id，例如 d9943662-..." />
-        <button id="connect-stream-btn" type="button">连接 SSE</button>
-        <button id="clear-log-btn" type="button">清空日志</button>
+      <div class="form-group">
+        <label>触发分支 (Branch Trigger)</label>
+        <div class="branch-mode">
+          <label class="radio-label"><input type="radio" name="branchMode" value="any" checked> 任何分支</label>
+          <label class="radio-label"><input type="radio" name="branchMode" value="specific"> 指定分支</label>
+        </div>
+        <input id="hook-branch-filter-input" type="text" placeholder="输入分支名，多个用逗号分隔 (例: main, develop)" style="display: none;" />
       </div>
-      <div id="stream-status-text" class="status-line">状态：待连接</div>
-    </section>
 
-    <section class="panel flow-grid" id="flow-grid">
-      <article id="step-accepted" class="step-card pending"><div class="step-title">accepted</div><div class="step-state">pending</div></article>
-      <article id="step-checkout" class="step-card pending"><div class="step-title">checkout</div><div class="step-state">pending</div></article>
-      <article id="step-build" class="step-card pending"><div class="step-title">build</div><div class="step-state">pending</div></article>
-      <article id="step-release" class="step-card pending"><div class="step-title">release</div><div class="step-state">pending</div></article>
-      <article id="step-health_check" class="step-card pending"><div class="step-title">health_check</div><div class="step-state">pending</div></article>
-      <article id="step-deploy" class="step-card pending"><div class="step-title">deploy</div><div class="step-state">pending</div></article>
-    </section>
+      <div class="form-group">
+        <label>安全 Token</label>
+        <input id="hook-token-input" type="text" placeholder="Hook 验证 Token" />
+      </div>
 
-    <section class="panel">
-      <div id="log-container" class="log-wrap"></div>
-    </section>
-  </main>
+      <button id="apply-hook-config-btn" class="btn btn-primary" style="margin-top: 8px;">一键配置项目 Hook</button>
+      <div id="project-config-status-text" class="status-text">✦ 准备就绪</div>
+
+      <div class="configured-section">
+        <div class="configured-header">
+          <h3 id="configured-project-title">已配置项目</h3>
+          <button id="refresh-configured-projects-btn" class="btn btn-secondary" style="padding: 6px 10px; font-size: 12px;">刷新</button>
+        </div>
+        <div id="configured-project-list" class="configured-list">
+          <div class="configured-empty">暂无已配置项目</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Monitor Panel -->
+    <div class="panel">
+      <h2 style="margin: 0; font-size: 20px;">实时监控</h2>
+      
+      <div class="form-group">
+        <label>任务 ID (Task ID)</label>
+        <div style="display: flex; gap: 8px;">
+          <input id="task-id-input" type="text" placeholder="输入 task_id 接入实时流" />
+          <button id="connect-stream-btn" class="btn btn-success">连接 SSE</button>
+        </div>
+      </div>
+      <div id="stream-status-text" class="status-text">✦ 尚未连接</div>
+
+      <div class="flow-grid" id="flow-grid">
+        <div id="step-accepted" class="step-card pending"><div class="icon">📥</div><div class="title">accepted</div><div class="state">等待</div></div>
+        <div id="step-checkout" class="step-card pending"><div class="icon">📦</div><div class="title">checkout</div><div class="state">等待</div></div>
+        <div id="step-build" class="step-card pending"><div class="icon">🔨</div><div class="title">build</div><div class="state">等待</div></div>
+        <div id="step-release" class="step-card pending"><div class="icon">🚀</div><div class="title">release</div><div class="state">等待</div></div>
+        <div id="step-health_check" class="step-card pending"><div class="icon">🩺</div><div class="title">health</div><div class="state">等待</div></div>
+        <div id="step-deploy" class="step-card pending"><div class="icon">✅</div><div class="title">deploy</div><div class="state">等待</div></div>
+      </div>
+    </div>
+
+    <!-- Logs Panel -->
+    <div class="panel panel-full">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <h2 style="margin: 0; font-size: 20px;">执行日志</h2>
+        <button id="clear-log-btn" class="btn btn-secondary" style="padding: 8px 16px; font-size: 13px;">清空终端</button>
+      </div>
+      <div id="log-container" class="terminal"></div>
+    </div>
+  </div>
 
   <script>
     const STEP_IDS = ["accepted", "checkout", "build", "release", "health_check", "deploy"];
-    const PROJECT_SEARCH_INPUT = document.getElementById("project-search-input");
     const PROJECT_SELECT = document.getElementById("project-select");
     const LOAD_PROJECTS_BTN = document.getElementById("load-projects-btn");
     const HOOK_URL_INPUT = document.getElementById("hook-url-input");
@@ -227,20 +342,40 @@ PREVIEW_HTML = """<!doctype html>
     const HOOK_BRANCH_FILTER_INPUT = document.getElementById("hook-branch-filter-input");
     const APPLY_HOOK_CONFIG_BTN = document.getElementById("apply-hook-config-btn");
     const PROJECT_CONFIG_STATUS_TEXT = document.getElementById("project-config-status-text");
+    const CONFIGURED_PROJECT_LIST = document.getElementById("configured-project-list");
+    const REFRESH_CONFIGURED_PROJECTS_BTN = document.getElementById("refresh-configured-projects-btn");
     const TASK_ID_INPUT = document.getElementById("task-id-input");
     const CONNECT_BTN = document.getElementById("connect-stream-btn");
     const CLEAR_LOG_BTN = document.getElementById("clear-log-btn");
     const STREAM_STATUS_TEXT = document.getElementById("stream-status-text");
     const LOG_CONTAINER = document.getElementById("log-container");
+    const BRANCH_RADIOS = document.querySelectorAll('input[name="branchMode"]');
+    
     let eventSource = null;
-    let cachedProjects = [];
+    let configuredProjects = [];
 
-    function setStatusText(text) {
-      STREAM_STATUS_TEXT.textContent = "状态：" + text;
-    }
+    // Branch mode toggle
+    BRANCH_RADIOS.forEach(radio => {
+      radio.addEventListener('change', (e) => {
+        if(e.target.value === 'specific') {
+          HOOK_BRANCH_FILTER_INPUT.style.display = 'block';
+          HOOK_BRANCH_FILTER_INPUT.focus();
+        } else {
+          HOOK_BRANCH_FILTER_INPUT.style.display = 'none';
+          HOOK_BRANCH_FILTER_INPUT.value = '';
+        }
+      });
+    });
 
-    function setProjectConfigStatus(text) {
-      PROJECT_CONFIG_STATUS_TEXT.textContent = "状态：" + text;
+    function setStatus(el, text, isError = false) {
+      el.textContent = text;
+      if(isError) {
+        el.classList.add('error');
+        el.classList.remove('active');
+      } else {
+        el.classList.add('active');
+        el.classList.remove('error');
+      }
     }
 
     function setStepState(step, status) {
@@ -248,172 +383,174 @@ PREVIEW_HTML = """<!doctype html>
       if (!card) return;
       card.classList.remove("pending", "running", "success", "failed", "skipped");
       card.classList.add(status);
-      const state = card.querySelector(".step-state");
-      if (state) state.textContent = status;
+      const state = card.querySelector(".state");
+      const statusMap = { pending: '等待', running: '运行中...', success: '成功', failed: '失败', skipped: '跳过' };
+      if (state) state.textContent = statusMap[status] || status;
     }
 
-    function appendLog(line) {
-      const p = document.createElement("p");
-      p.className = "log-line";
-      p.textContent = line;
+    function appendLog(payload) {
+      const p = document.createElement("div");
+      p.className = "log-line " + (payload.status === 'failed' ? 'failed' : payload.status === 'success' ? 'success' : '');
+      const timeStr = new Date(payload.timestamp).toLocaleTimeString();
+      p.innerHTML = `<span class="time">[${timeStr}]</span><span class="step">[${payload.step}]</span> ${payload.message}`;
       LOG_CONTAINER.appendChild(p);
+      if(payload.output) {
+        const out = document.createElement('div');
+        out.style.opacity = 0.8;
+        out.style.paddingLeft = '12px';
+        out.style.borderLeft = '2px solid rgba(255,255,255,0.1)';
+        out.style.margin = '4px 0 8px 0';
+        out.style.whiteSpace = 'pre-wrap';
+        out.textContent = payload.output;
+        LOG_CONTAINER.appendChild(out);
+      }
       LOG_CONTAINER.scrollTop = LOG_CONTAINER.scrollHeight;
     }
 
     function resetSteps() {
-      STEP_IDS.forEach((step) => setStepState(step, "pending"));
+      STEP_IDS.forEach(step => setStepState(step, "pending"));
     }
 
-    function closeStream() {
-      if (eventSource) {
-        eventSource.close();
-        eventSource = null;
-      }
-    }
-
-    function renderProjectOptions(projects) {
-      PROJECT_SELECT.innerHTML = "";
-      if (!projects.length) {
-        const option = document.createElement("option");
-        option.value = "";
-        option.textContent = "未查询到项目";
-        PROJECT_SELECT.appendChild(option);
+    function renderConfiguredProjects() {
+      CONFIGURED_PROJECT_LIST.innerHTML = "";
+      if (!configuredProjects.length) {
+        CONFIGURED_PROJECT_LIST.innerHTML = '<div class="configured-empty">暂无已配置项目</div>';
         return;
       }
-      projects.forEach((project) => {
-        const option = document.createElement("option");
-        option.value = String(project.id);
-        option.textContent = project.path_with_namespace + " (id=" + project.id + ")";
-        PROJECT_SELECT.appendChild(option);
+      configuredProjects.forEach((project) => {
+        const item = document.createElement("div");
+        item.className = "configured-item";
+        const updatedAt = project.updated_at ? new Date(project.updated_at).toLocaleString() : "-";
+        item.innerHTML = `
+          <span class="configured-path">${project.path_with_namespace || project.name || ("project-" + project.project_id)}</span>
+          <div class="configured-meta">Hook: ${project.hook_url || "-"}</div>
+          <div class="configured-meta">分支: ${project.branch_filter || "任何分支"}</div>
+          <div class="configured-meta">时间: ${updatedAt}</div>
+        `;
+        CONFIGURED_PROJECT_LIST.appendChild(item);
       });
     }
 
-    async function loadGitLabConfigDefaults() {
+    async function loadConfiguredProjects() {
       try {
-        const response = await fetch("/api/gitlab/config");
-        if (!response.ok) throw new Error("配置接口异常");
+        const response = await fetch("/api/gitlab/configured-projects");
         const data = await response.json();
-        if (!HOOK_URL_INPUT.value && data.default_hook_url) {
-          HOOK_URL_INPUT.value = data.default_hook_url;
-        }
-        if (!HOOK_URL_INPUT.value) {
-          HOOK_URL_INPUT.value = window.location.origin + "/api/hook/gitlab";
-        }
-        if (!HOOK_BRANCH_FILTER_INPUT.value && data.default_hook_branch_filter) {
-          HOOK_BRANCH_FILTER_INPUT.value = data.default_hook_branch_filter;
-        }
-        if (data.authenticated) {
-          setProjectConfigStatus("GitLab 已登录: " + (data.user.username || data.user.name || "unknown"));
-          return;
-        }
-        if (data.auth_error) {
-          setProjectConfigStatus("GitLab 鉴权失败: " + data.auth_error);
-          return;
-        }
-        if (!data.has_token && !data.has_password_auth) {
-          setProjectConfigStatus("未配置 GitLab 凭据，请先设置服务端环境变量");
-          return;
-        }
-        setProjectConfigStatus("检测到凭据，但尚未完成鉴权");
+        if (!response.ok) throw new Error(data.detail || "加载失败");
+        configuredProjects = data.projects || [];
+        renderConfiguredProjects();
       } catch (err) {
-        setProjectConfigStatus("读取 GitLab 配置失败: " + String(err));
+        CONFIGURED_PROJECT_LIST.innerHTML = '<div class="configured-empty">加载已配置项目失败</div>';
       }
     }
 
     async function loadProjects() {
-      const query = PROJECT_SEARCH_INPUT.value.trim();
-      const params = new URLSearchParams();
-      if (query) params.set("search", query);
-      params.set("per_page", "100");
-      setProjectConfigStatus("加载项目中...");
+      setStatus(PROJECT_CONFIG_STATUS_TEXT, "✦ 加载项目中...");
       try {
-        const response = await fetch("/api/gitlab/projects?" + params.toString());
+        const response = await fetch("/api/gitlab/projects?per_page=100");
         const data = await response.json();
-        if (!response.ok) throw new Error(data.detail || "加载失败");
-        cachedProjects = data.projects || [];
-        renderProjectOptions(cachedProjects);
-        setProjectConfigStatus("项目加载完成，共 " + cachedProjects.length + " 个");
+        PROJECT_SELECT.innerHTML = "";
+        if (!data.projects?.length) {
+          PROJECT_SELECT.innerHTML = '<option value="">未找到项目</option>';
+          return;
+        }
+        data.projects.forEach(p => {
+          const opt = document.createElement("option");
+          opt.value = p.id;
+          opt.textContent = p.path_with_namespace;
+          PROJECT_SELECT.appendChild(opt);
+        });
+        setStatus(PROJECT_CONFIG_STATUS_TEXT, `✦ 已加载 ${data.projects.length} 个项目`);
       } catch (err) {
-        setProjectConfigStatus("加载项目失败: " + String(err));
+        setStatus(PROJECT_CONFIG_STATUS_TEXT, "✦ 加载失败: " + err.message, true);
       }
     }
 
     async function applyProjectHookConfig() {
       const projectId = PROJECT_SELECT.value;
-      if (!projectId) {
-        setProjectConfigStatus("请先选择项目");
-        return;
-      }
+      if (!projectId) return setStatus(PROJECT_CONFIG_STATUS_TEXT, "✦ 请先选择项目", true);
       const hookUrl = HOOK_URL_INPUT.value.trim();
-      if (!hookUrl) {
-        setProjectConfigStatus("Hook URL 不能为空");
-        return;
-      }
+      if (!hookUrl) return setStatus(PROJECT_CONFIG_STATUS_TEXT, "✦ Hook URL 不能为空", true);
+      
       const payload = {
         hook_url: hookUrl,
         hook_token: HOOK_TOKEN_INPUT.value.trim(),
-        branch_filter: HOOK_BRANCH_FILTER_INPUT.value.trim(),
+        branch_filter: document.querySelector('input[name="branchMode"]:checked').value === 'specific' 
+                       ? HOOK_BRANCH_FILTER_INPUT.value.trim() : "",
         enable_ssl_verification: true,
       };
-      setProjectConfigStatus("正在配置 Hook...");
+      
+      setStatus(PROJECT_CONFIG_STATUS_TEXT, "✦ 正在配置 Hook...");
       try {
-        const response = await fetch("/api/gitlab/projects/" + encodeURIComponent(projectId) + "/hook", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
+        const response = await fetch("/api/gitlab/projects/" + projectId + "/hook", {
+          method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.detail || "配置失败");
-        const action = data.action || "updated";
-        setProjectConfigStatus("配置成功: " + action + " (project_id=" + projectId + ")");
+        setStatus(PROJECT_CONFIG_STATUS_TEXT, "✦ 配置成功!");
+        if (data.project) {
+          configuredProjects = [data.project, ...configuredProjects.filter(item => item.project_id !== data.project.project_id)];
+          renderConfiguredProjects();
+        } else {
+          loadConfiguredProjects();
+        }
       } catch (err) {
-        setProjectConfigStatus("配置失败: " + String(err));
+        setStatus(PROJECT_CONFIG_STATUS_TEXT, "✦ 配置失败: " + err.message, true);
       }
     }
 
     function connectStream() {
       const taskId = TASK_ID_INPUT.value.trim();
-      if (!taskId) {
-        setStatusText("请输入 task_id");
-        return;
-      }
-      closeStream();
+      if (!taskId) return setStatus(STREAM_STATUS_TEXT, "✦ 请输入 task_id", true);
+      
+      if (eventSource) eventSource.close();
       resetSteps();
-      setStatusText("连接中...");
-      const url = "/api/deploy/" + encodeURIComponent(taskId) + "/stream";
-      eventSource = new EventSource(url);
-
-      eventSource.onopen = () => setStatusText("已连接，等待事件");
+      LOG_CONTAINER.innerHTML = '';
+      setStatus(STREAM_STATUS_TEXT, "✦ 连接中...");
+      
+      eventSource = new EventSource("/api/deploy/" + encodeURIComponent(taskId) + "/stream");
+      eventSource.onopen = () => setStatus(STREAM_STATUS_TEXT, "✦ 已连接到实时流");
       eventSource.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data);
-          const line = "[" + payload.timestamp + "] " + payload.step + " => " + payload.status + " | " + payload.message;
-          appendLog(line + (payload.output ? "\\n" + payload.output : ""));
+          appendLog(payload);
           setStepState(payload.step, payload.status);
-        } catch (err) {
-          appendLog("消息解析失败: " + String(err));
-        }
+        } catch (err) { console.error("Parse error", err); }
       };
       eventSource.addEventListener("end", () => {
-        setStatusText("任务完成");
-        closeStream();
+        setStatus(STREAM_STATUS_TEXT, "✦ 任务执行完成");
+        eventSource.close();
       });
-      eventSource.onerror = () => {
-        setStatusText("连接中断");
-      };
+      eventSource.onerror = () => setStatus(STREAM_STATUS_TEXT, "✦ 连接中断", true);
     }
 
     CONNECT_BTN.addEventListener("click", connectStream);
     CLEAR_LOG_BTN.addEventListener("click", () => { LOG_CONTAINER.innerHTML = ""; });
     LOAD_PROJECTS_BTN.addEventListener("click", loadProjects);
     APPLY_HOOK_CONFIG_BTN.addEventListener("click", applyProjectHookConfig);
+    REFRESH_CONFIGURED_PROJECTS_BTN.addEventListener("click", loadConfiguredProjects);
 
-    const fromQuery = new URLSearchParams(window.location.search).get("task_id");
-    if (fromQuery) {
-      TASK_ID_INPUT.value = fromQuery;
-      connectStream();
+    async function init() {
+      loadProjects();
+      loadConfiguredProjects();
+      try {
+        const response = await fetch("/api/gitlab/config");
+        const data = await response.json();
+        HOOK_URL_INPUT.value = data.default_hook_url || (window.location.origin + "/api/hook/gitlab");
+        if(data.default_hook_branch_filter) {
+          document.querySelector('input[value="specific"]').checked = true;
+          HOOK_BRANCH_FILTER_INPUT.style.display = 'block';
+          HOOK_BRANCH_FILTER_INPUT.value = data.default_hook_branch_filter;
+        }
+      } catch(e) {}
+      
+      const fromQuery = new URLSearchParams(window.location.search).get("task_id");
+      if (fromQuery) {
+        TASK_ID_INPUT.value = fromQuery;
+        connectStream();
+      }
     }
-    loadGitLabConfigDefaults();
+    init();
   </script>
 </body>
 </html>
@@ -438,6 +575,7 @@ GITLAB_CA_CERT = os.getenv("GITLAB_CA_CERT", "").strip()
 GITLAB_DEFAULT_HOOK_URL = os.getenv("HOOK_URL", "").strip()
 GITLAB_DEFAULT_HOOK_TOKEN = os.getenv("HOOK_TOKEN", "").strip() or GITLAB_WEBHOOK_SECRET
 GITLAB_DEFAULT_HOOK_BRANCH_FILTER = os.getenv("HOOK_BRANCH_FILTER", "").strip() or "main"
+CONFIGURED_PROJECTS_FILE = Path(os.getenv("CONFIGURED_PROJECTS_FILE", "./data/configured_projects.json")).expanduser().resolve()
 runtime_gitlab_session_token: str = ""
 runtime_gitlab_identity_checked = False
 runtime_gitlab_identity: dict[str, Any] = {}
@@ -469,6 +607,7 @@ class ProjectHookConfigureRequest(BaseModel):
 tasks: dict[str, DeployTask] = {}
 task_queues: dict[str, asyncio.Queue[dict[str, Any]]] = {}
 seen_event_uuids: set[str] = set()
+configured_projects: dict[int, dict[str, Any]] = {}
 MAX_SEEN_EVENT_UUIDS = 2000
 
 
@@ -538,6 +677,38 @@ def add_seen_event(event_uuid: str) -> None:
         # Keep memory bounded; this is a best-effort in-memory idempotency cache.
         for _ in range(len(seen_event_uuids) - MAX_SEEN_EVENT_UUIDS):
             seen_event_uuids.pop()
+
+
+def load_configured_projects() -> dict[int, dict[str, Any]]:
+    if not CONFIGURED_PROJECTS_FILE.exists():
+        return {}
+    try:
+        raw = json.loads(CONFIGURED_PROJECTS_FILE.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(raw, list):
+        return {}
+    items: dict[int, dict[str, Any]] = {}
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        project_id = item.get("project_id")
+        if isinstance(project_id, int):
+            items[project_id] = item
+    return items
+
+
+def save_configured_projects() -> None:
+    CONFIGURED_PROJECTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    payload = sorted(
+        configured_projects.values(),
+        key=lambda item: item.get("updated_at", ""),
+        reverse=True,
+    )
+    CONFIGURED_PROJECTS_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+configured_projects.update(load_configured_projects())
 
 
 def gitlab_verify_value() -> bool | str:
@@ -869,6 +1040,16 @@ async def list_gitlab_projects(search: str = "", per_page: int = 100) -> dict[st
     return {"projects": projects, "count": len(projects)}
 
 
+@app.get("/api/gitlab/configured-projects")
+async def list_configured_gitlab_projects() -> dict[str, Any]:
+    items = sorted(
+        configured_projects.values(),
+        key=lambda item: item.get("updated_at", ""),
+        reverse=True,
+    )
+    return {"projects": items, "count": len(items)}
+
+
 @app.post("/api/gitlab/projects/{project_id}/hook")
 async def configure_gitlab_project_hook(
     project_id: int,
@@ -878,6 +1059,7 @@ async def configure_gitlab_project_hook(
     if not request_data.hook_url.strip():
         raise HTTPException(status_code=400, detail="hook_url 不能为空")
 
+    project_data = await gitlab_api_request("GET", f"/projects/{project_id}")
     hooks = await gitlab_api_request("GET", f"/projects/{project_id}/hooks")
     existing_hook = next((hook for hook in hooks if hook.get("url") == request_data.hook_url), None)
 
@@ -888,8 +1070,17 @@ async def configure_gitlab_project_hook(
     }
     if request_data.hook_token.strip():
         payload["token"] = request_data.hook_token.strip()
-    if request_data.branch_filter.strip():
-        payload["push_events_branch_filter"] = request_data.branch_filter.strip()
+        
+    branches = request_data.branch_filter.strip()
+    if branches:
+        if "," in branches:
+            url_parts = list(urlparse(payload["url"]))
+            query = dict(parse_qsl(url_parts[4]))
+            query["branches"] = branches
+            url_parts[4] = urlencode(query)
+            payload["url"] = urlunparse(url_parts)
+        else:
+            payload["push_events_branch_filter"] = branches
 
     if existing_hook:
         hook_id = int(existing_hook["id"])
@@ -898,19 +1089,35 @@ async def configure_gitlab_project_hook(
             f"/projects/{project_id}/hooks/{hook_id}",
             json_body=payload,
         )
-        return {"ok": True, "action": "updated", "hook": hook_data}
+        action = "updated"
+    else:
+        hook_data = await gitlab_api_request(
+            "POST",
+            f"/projects/{project_id}/hooks",
+            json_body=payload,
+        )
+        action = "created"
 
-    hook_data = await gitlab_api_request(
-        "POST",
-        f"/projects/{project_id}/hooks",
-        json_body=payload,
-    )
-    return {"ok": True, "action": "created", "hook": hook_data}
+    record = {
+        "project_id": project_id,
+        "name": project_data.get("name"),
+        "path_with_namespace": project_data.get("path_with_namespace"),
+        "web_url": project_data.get("web_url"),
+        "hook_url": request_data.hook_url.strip(),
+        "branch_filter": request_data.branch_filter.strip(),
+        "hook_id": hook_data.get("id"),
+        "action": action,
+        "updated_at": now_iso(),
+    }
+    configured_projects[project_id] = record
+    save_configured_projects()
+    return {"ok": True, "action": action, "hook": hook_data, "project": record}
 
 
 @app.post("/api/hook/gitlab")
 async def gitlab_hook(
     request: Request,
+    branches: str | None = None,
     x_gitlab_token: str | None = Header(default=None),
     x_gitlab_event: str | None = Header(default=None),
     x_gitlab_event_uuid: str | None = Header(default=None),
@@ -934,6 +1141,11 @@ async def gitlab_hook(
         return JSONResponse({"ok": True, "ignored": "ref is not branch"})
     if not is_branch_allowed(branch):
         return JSONResponse({"ok": True, "ignored": "branch filtered", "branch": branch})
+
+    if branches:
+        allowed_list = [b.strip() for b in branches.split(",") if b.strip()]
+        if allowed_list and not any(fnmatch.fnmatch(branch, pattern) for pattern in allowed_list):
+            return JSONResponse({"ok": True, "ignored": "branch filtered by webhook branches param", "branch": branch})
 
     project = payload.get("project", {}) if isinstance(payload.get("project"), dict) else {}
     project_path = str(project.get("path_with_namespace") or project.get("name") or "unknown-project")
@@ -1030,6 +1242,7 @@ async def root() -> dict[str, Any]:
             "hook": "/api/hook/gitlab",
             "gitlab_config": "/api/gitlab/config",
             "gitlab_projects": "/api/gitlab/projects",
+            "gitlab_configured_projects": "/api/gitlab/configured-projects",
             "gitlab_project_hook": "/api/gitlab/projects/{project_id}/hook",
             "task_detail": "/api/deploy/{task_id}",
             "task_stream": "/api/deploy/{task_id}/stream",
