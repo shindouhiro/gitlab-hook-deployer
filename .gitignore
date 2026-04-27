@@ -1,7 +1,25 @@
+# Python
 .env
 .venv/
 __pycache__/
 *.pyc
-deploy_repos/
-repositories/
+.python-version
+
+# Node
+node_modules/
+dist/
+dist-ssr/
+*.local
+.pnpm-debug.log*
+
+# Workspace/Project
 data/
+repositories/
+deploy_repos/
+
+# IDE/System
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*.log
