@@ -17,6 +17,7 @@ from uuid import uuid4
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 app = FastAPI(title="GitLab Hook Deployer", version="0.1.0")
@@ -1259,3 +1260,7 @@ async def root() -> dict[str, Any]:
             "gitlab_has_password_auth": bool(GITLAB_USERNAME and GITLAB_PASSWORD),
         },
     }
+
+
+if Path("static").exists():
+    app.mount("/", StaticFiles(directory="static", html=True), name="static")
